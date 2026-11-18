@@ -66,3 +66,10 @@ Project structure:
 - `src/main.js` — Vue entry point
 - `src/style.css` — Tailwind directives
 - `tailwind.config.js` / `postcss.config.js` — Tailwind configuration
+- `public/audio/` — pre-generated voice clips (`sound-a.mp3` … `sound-z.mp3`, `word-a.mp3` … `word-z.mp3`)
+
+## 🔊 Voice / Audio
+
+The voice does **not** rely on the browser's `speechSynthesis`, which is silent on some phones and tablets. Each phoneme and example word is a bundled MP3 clip played with a plain Audio element after a tap.
+
+Live TTS API hook: in `src/App.vue`, set the `TTS_API_URL` constant to a proxy endpoint that accepts `?text=...` and returns an MP3 (for example a Cloudflare Worker or serverless function holding your OpenAI, ElevenLabs, or Google TTS key — never put a raw API key in the frontend, this site is public). When set, clips are fetched live from that API instead of the bundled files. If a clip fails to load, the app falls back to browser `speechSynthesis`.
