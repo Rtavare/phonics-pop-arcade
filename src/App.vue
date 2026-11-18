@@ -179,12 +179,55 @@ function loadPreferredVoice() {
   if (sorted.length > 0 && !selectedVoiceName.value) selectedVoiceName.value = sorted[0].name;
 }
 function onVoiceChange() { playSfx('click'); if (mode.value === 'learn') playCurrentPhonics(); else speakArcadeTarget(); }
+/* =========================================================
+ * VOICE AUDIO — bundled TTS clips first, live API hook second,
+ * browser speechSynthesis last.
+ * Browser speechSynthesis is silent on some phones/tablets, so the
+ * app ships pre-generated MP3 clips in public/audio/
+ * (sound-a.mp3 … sound-z.mp3, word-a.mp3 … word-z.mp3) and plays
+ * them with a plain Audio element, which works everywhere after a tap.
+ * LIVE API HOOK: set TTS_API_URL to a proxy endpoint that accepts
+ * ?text=... and returns an MP3 (e.g. a Cloudflare Worker / serverless
+ * function holding your OpenAI, ElevenLabs, or Google TTS key — never
+ * put a raw API key in this file, the site is public). When set, clips
+ * are fetched live from that API instead of the bundled files.
+ * ========================================================= */
+const TTS_API_URL = '';
+let currentAudio = null;
+function stopCurrentAudio() {
+  if (currentAudio) { try { currentAudio.pause(); currentAudio.src = ''; } catch (e) {} currentAudio = null; }
+}
+function clipUrl(kind, item) { return import.meta.env.BASE_URL + 'audio/' + kind + '-' + item.lower + '.mp3'; }
+function playAudioUrl(url, fallbackText, onEndCallback = null) {
+  if (isMuted.value) { const t = setTimeout(() => { if (onEndCallback) onEndCallback(); }, 400); speechTimers.push(t); return; }
+  const mouthFrames = ['😮','😄','😲','😊']; let frameIdx = 0;
+  const mouthInterval = setInterval(() => { speakerFace.value = mouthFrames[frameIdx % mouthFrames.length]; frameIdx++; }, 180);
+  let done = false;
+  const cleanup = () => { if (done) return; done = true; clearInterval(mouthInterval); if (onEndCallback) onEndCallback(); };
+  try {
+    stopCurrentAudio();
+    const audio = new Audio(url); currentAudio = audio;
+    audio.onended = cleanup;
+    audio.onerror = () => { clearInterval(mouthInterval); done = true; speakWithBrowserVoice(fallbackText, onEndCallback); };
+    const p = audio.play();
+    if (p && p.catch) p.catch(() => { clearInterval(mouthInterval); done = true; speakWithBrowserVoice(fallbackText, onEndCallback); });
+  } catch (e) { clearInterval(mouthInterval); speakWithBrowserVoice(fallbackText, onEndCallback); }
+}
+function playClip(kind, item, onEndCallback = null) {
+  const fallbackText = kind === 'sound' ? item.speechSound : item.word + '!';
+  if (TTS_API_URL) {
+    playAudioUrl(TTS_API_URL + '?text=' + encodeURIComponent(fallbackText), fallbackText, onEndCallback);
+  } else {
+    playAudioUrl(clipUrl(kind, item), fallbackText, onEndCallback);
+  }
+}
 function clearSpeechQueue() {
   speechTimers.forEach(id => clearTimeout(id)); speechTimers = [];
+  stopCurrentAudio();
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   isSpeaking.value = false; speakerFace.value = '😊'; activeCardPulse.value = 'none';
 }
-function speakUtterance(text, onEndCallback = null) {
+function speakWithBrowserVoice(text, onEndCallback = null) {
   if (isMuted.value || !('speechSynthesis' in window)) {
     const fallbackTimer = setTimeout(() => { if (onEndCallback) onEndCallback(); }, 750);
     speechTimers.push(fallbackTimer); return;
@@ -205,15 +248,15 @@ function speakUtterance(text, onEndCallback = null) {
 function playCurrentPhonics(onComplete = null) {
   clearSpeechQueue(); const item = currentItem.value;
   isSpeaking.value = true; speakerFace.value = '😮'; activeCardPulse.value = 'letter';
-  speakUtterance(item.speechSound, () => {
+  playClip('sound', item, () => {
     isSpeaking.value = false; speakerFace.value = '👂';
     const t1 = setTimeout(() => {
       isSpeaking.value = true; speakerFace.value = '😮';
-      speakUtterance(item.speechSound, () => {
+      playClip('sound', item, () => {
         isSpeaking.value = false; speakerFace.value = '👂';
         const t2 = setTimeout(() => {
           activeCardPulse.value = 'word'; isSpeaking.value = true; speakerFace.value = '😄';
-          speakUtterance(item.word + '!', () => {
+          playClip('word', item, () => {
             isSpeaking.value = false; speakerFace.value = '😊'; activeCardPulse.value = 'none';
             if (onComplete) onComplete();
           });
@@ -261,8 +304,8 @@ function showArcadeFeedback(text, isSuccess = true) {
 }
 function speakArcadeTarget() {
   if (!targetItem.value) return; clearSpeechQueue(); promptPulse.value = true;
-  speakUtterance(targetItem.value.speechSound, () => {
-    const t = setTimeout(() => { speakUtterance(targetItem.value.speechSound, () => { promptPulse.value = false; }); }, 480);
+  playClip('sound', targetItem.value, () => {
+    const t = setTimeout(() => { playClip('sound', targetItem.value, () => { promptPulse.value = false; }); }, 480);
     speechTimers.push(t);
   });
 }
@@ -295,7 +338,7 @@ function handleBubbleTap(bubbleObj) {
   if (bubbleObj.item.sound === targetItem.value.sound) {
     roundLocked = true; bubbleObj.popped = true; playSfx('pop'); addStars(1); streak.value++; roundScore.value++;
     showArcadeFeedback(`⭐ /${bubbleObj.item.sound}/ — ${bubbleObj.item.word}! ${bubbleObj.item.emoji}`, true);
-    clearSpeechQueue(); speakUtterance(`${bubbleObj.item.speechSound}! ${bubbleObj.item.word}!`);
+    clearSpeechQueue(); playClip('sound', bubbleObj.item, () => { playClip('word', bubbleObj.item); });
     bubbles.forEach(b => { if (!b.popped) b.faded = true; });
     setTimeout(() => {
       if (roundScore.value >= roundGoal) { addStars(5); playSfx('fanfare'); launchConfetti(); stageComplete.value = true; }
